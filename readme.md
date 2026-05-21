@@ -45,12 +45,12 @@ This agent looks at historical tickets.
 
 Its job is to:
 
-- inspect how tickets were handled in the past
+- inspect how tickets were handled in the past by human sme
 - find repeated patterns
 - suggest improvements to the rule book
 - propose new categories, subcategories, required fields, or routing rules
 
-It does **not** automatically rewrite the rule book yet. It only proposes changes for human review.
+It does **not** automatically rewrite the rule book yet. It only proposes changes for human SME review.
 
 ---
 
@@ -84,10 +84,10 @@ For example:
 
 **The Rule Book**
 
-The rule book is stored as JSON:
+The rule book is stored as markdown:
 
 ```text
-ticket_triage/templates/state_machine.v1.json
+ticket_triage/templates/state_machine.v1.md
 ```
 
 This file defines the system’s triage logic.
