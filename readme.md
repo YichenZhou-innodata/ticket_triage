@@ -21,6 +21,12 @@ For v1, the system is a **copilot**, not a fully automatic ticket resolver. It r
 
 ---
 
+**Status**
+
+This repository is at **bootstrap stage**. The package layout described below is the *target* — most files do not exist yet. v1 is a copilot: every recommendation is human-reviewed before any real ticket action is taken.
+
+---
+
 **High-Level Architecture**
 
 The project has two ADK agents:
@@ -90,7 +96,7 @@ The rule book is stored as markdown:
 ticket_triage/templates/state_machine.v1.md
 ```
 
-This file defines the system’s triage logic.
+This file defines the system's triage logic.
 
 It contains:
 
@@ -102,7 +108,7 @@ It contains:
 - clarification prompts
 - final review behavior
 
-Think of it as the system’s operating manual.
+Think of it as the system's operating manual.
 
 The code does not hard-code all decisions. Instead, it loads the rule book and uses it to decide what information is required and what action should be recommended.
 
@@ -253,6 +259,71 @@ The intern should understand that the LLM is not the whole system. The LLM is pa
 
 ---
 
+**Setup**
+
+1. Clone the repository:
+
+   ```text
+   git clone https://github.com/YichenZhou-innodata/ticket_triage.git
+   cd ticket_triage
+   ```
+
+2. Create and activate a Python virtual environment (Python 3.11+ recommended):
+
+   ```text
+   python -m venv .venv
+   ```
+
+   - PowerShell: `.\.venv\Scripts\Activate.ps1`
+   - Bash / WSL / macOS: `source .venv/bin/activate`
+
+3. Install dependencies:
+
+   ```text
+   pip install -r requirements.txt
+   ```
+
+4. Configure the Google API key:
+
+   ```text
+   cp .env.example .env
+   ```
+
+   Then edit `.env` and set `GOOGLE_API_KEY` to a key from <https://aistudio.google.com/apikey>.
+
+The Vertex AI path is also supported via `GOOGLE_GENAI_USE_VERTEXAI=TRUE` plus `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` and `gcloud auth application-default login`. The default (`FALSE`) uses the AI Studio Gemini Developer API.
+
+---
+
+**Project Structure**
+
+```text
+ticket_triage/
+├── ticket_triage/
+│   ├── __init__.py
+│   ├── agent.py                       # ticket_executor_agent, template_evolution_agent
+│   ├── schema.py                      # data models (tickets, categories, actions, etc.)
+│   ├── domain/
+│   │   ├── __init__.py
+│   │   ├── classification.py          # primary + subcategory classification
+│   │   ├── recommendation.py          # state/action flow + next-action recommendation
+│   │   └── evolution.py               # historical-ticket analysis + rule-book proposals
+│   ├── templates/
+│   │   └── state_machine.v1.json      # the rule book (planned)
+│   └── data/
+│       └── sample_tickets.jsonl       # seed historical examples (planned)
+├── tests/
+│   └── __init__.py
+├── readme.md
+├── CONTRIBUTING.md
+├── CLAUDE.md
+├── requirements.txt
+├── .env.example
+└── .gitignore
+```
+
+---
+
 **Where The Main Code Lives**
 
 The important files are:
@@ -301,6 +372,13 @@ ticket_triage/data/sample_tickets.jsonl
 ```
 
 Seed examples that simulate historical tickets.
+
+---
+
+**Documentation**
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — branch naming, commit conventions, docstring requirements, PR process.
+- [CLAUDE.md](CLAUDE.md) — guidance for AI assistants (Claude Code and similar) working in this repo.
 
 ---
 
