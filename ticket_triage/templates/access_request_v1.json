@@ -1,0 +1,186 @@
+{
+  "name": "access_request_v1",
+  "primary_category": "access_request",
+  "notes": {
+    "spec_source": "access_issue_state_machine.md (root of repo)",
+    "allowed_events_per_state": "Inferred from state and event semantics. The spec does not enumerate which events are valid in each state. Confirm with Yichen.",
+    "allowed_actions_per_state": "Inferred from state semantics. The spec does not enumerate which actions are valid in each state. Confirm with Yichen.",
+    "transitions": "Each transition carries a 'source' field: 'spec_explicit' (from the ABP-1007 example) or 'inferred' (read from state and event names). Transitions where the spec is genuinely ambiguous live in 'todo_transitions' and are intentionally omitted from the loadable transitions list."
+  },
+  "required_fields": ["employee_id"],
+  "provisional_required_fields": [
+    "name",
+    "portfolio",
+    "region",
+    "user_role",
+    "project_type",
+    "leads",
+    "additional_context"
+  ],
+  "_required_fields_note": "Only employee_id is spec-confirmed. Others are inferred from the entity schema and need Yichen's confirmation before being moved to required_fields.",
+  "allowed_events_per_state": {
+    "new": ["ticket_created"],
+    "intake": [
+      "required_fields_extracted",
+      "missing_required_fields_detected",
+      "duplicate_candidate_found",
+      "approver_identified",
+      "approver_missing"
+    ],
+    "missing_info": ["reporter_provided_missing_info"],
+    "duplicate_review": ["duplicate_confirmed", "duplicate_rejected"],
+    "ready_for_access_review": ["approval_requested"],
+    "approver_review": ["approval_granted", "approval_denied"],
+    "access_provisioning": ["access_provisioned", "access_failed"],
+    "verification": ["user_confirmed_access", "user_reports_access_not_working"],
+    "resolved": ["ticket_reopened"],
+    "closed": ["ticket_reopened"],
+    "denied": ["ticket_reopened"],
+    "stale_waiting_for_user": ["reporter_provided_missing_info", "no_user_response"],
+    "human_review": ["human_override"]
+  },
+  "allowed_actions_per_state": {
+    "new": ["extract_fields"],
+    "intake": ["extract_fields", "suggest_duplicate_review"],
+    "missing_info": ["ask_for_missing_info"],
+    "duplicate_review": ["suggest_duplicate_review"],
+    "ready_for_access_review": ["request_approval", "recommend_route_to_access_admin"],
+    "approver_review": [],
+    "access_provisioning": ["recommend_route_to_access_admin"],
+    "verification": ["ask_user_to_verify"],
+    "resolved": ["draft_resolution_comment", "recommend_close_ticket"],
+    "closed": [],
+    "denied": ["draft_denial_comment", "recommend_close_ticket"],
+    "stale_waiting_for_user": ["send_follow_up_reminder", "escalate_to_human"],
+    "human_review": ["escalate_to_human"]
+  },
+  "transitions": [
+    {
+      "from_state": "intake",
+      "event": "missing_required_fields_detected",
+      "to_state": "missing_info",
+      "source": "spec_explicit",
+      "evidence": "ABP-1007 example: state=missing_info, last_event=missing_required_fields_detected."
+    },
+    {
+      "from_state": "missing_info",
+      "event": "reporter_provided_missing_info",
+      "to_state": "intake",
+      "source": "inferred",
+      "evidence": "Once the reporter supplies the missing data, the agent re-enters intake to re-extract."
+    },
+    {
+      "from_state": "intake",
+      "event": "required_fields_extracted",
+      "to_state": "ready_for_access_review",
+      "source": "inferred",
+      "evidence": "When extraction succeeds and no missing-info is detected, the ticket is ready for the access-review pipeline."
+    },
+    {
+      "from_state": "intake",
+      "event": "duplicate_candidate_found",
+      "to_state": "duplicate_review",
+      "source": "inferred",
+      "evidence": "Direct event-to-state name correspondence."
+    },
+    {
+      "from_state": "duplicate_review",
+      "event": "duplicate_rejected",
+      "to_state": "ready_for_access_review",
+      "source": "inferred",
+      "evidence": "Not a duplicate; resume the normal access flow."
+    },
+    {
+      "from_state": "ready_for_access_review",
+      "event": "approval_requested",
+      "to_state": "approver_review",
+      "source": "inferred",
+      "evidence": "Direct event-to-state name correspondence."
+    },
+    {
+      "from_state": "approver_review",
+      "event": "approval_granted",
+      "to_state": "access_provisioning",
+      "source": "inferred",
+      "evidence": "Granted approval triggers provisioning per state ordering."
+    },
+    {
+      "from_state": "approver_review",
+      "event": "approval_denied",
+      "to_state": "denied",
+      "source": "inferred",
+      "evidence": "Direct event-to-state name correspondence."
+    },
+    {
+      "from_state": "access_provisioning",
+      "event": "access_provisioned",
+      "to_state": "verification",
+      "source": "inferred",
+      "evidence": "Provisioning success advances to user-verification per state description."
+    },
+    {
+      "from_state": "access_provisioning",
+      "event": "access_failed",
+      "to_state": "human_review",
+      "source": "inferred",
+      "evidence": "Provisioning failure needs manual judgment per state description."
+    },
+    {
+      "from_state": "verification",
+      "event": "user_confirmed_access",
+      "to_state": "resolved",
+      "source": "inferred",
+      "evidence": "Direct event-to-state name correspondence."
+    }
+  ],
+  "todo_transitions": [
+    {
+      "from_state": "duplicate_review",
+      "event": "duplicate_confirmed",
+      "candidates": ["closed", "human_review"],
+      "reason": "Spec does not say whether a confirmed duplicate auto-closes or routes to a human."
+    },
+    {
+      "from_state": "verification",
+      "event": "user_reports_access_not_working",
+      "candidates": ["access_provisioning", "human_review"],
+      "reason": "Could retry provisioning or escalate; spec is silent."
+    },
+    {
+      "from_state": "*",
+      "event": "no_user_response",
+      "candidates": ["stale_waiting_for_user"],
+      "reason": "Likely applies from multiple states; spec doesn't enumerate which."
+    },
+    {
+      "from_state": "*",
+      "event": "human_override",
+      "candidates": ["human_review"],
+      "reason": "Likely applies from any state; spec doesn't enumerate which."
+    },
+    {
+      "from_state": "resolved | closed | denied",
+      "event": "ticket_reopened",
+      "candidates": ["intake", "new"],
+      "reason": "Could re-enter intake or restart at new; spec is silent."
+    },
+    {
+      "from_state": "new",
+      "event": "ticket_created",
+      "candidates": ["intake"],
+      "reason": "Likely an auto-advance on creation but spec doesn't say."
+    },
+    {
+      "from_state": "intake",
+      "event": "approver_identified",
+      "candidates": ["ready_for_access_review", "approver_review"],
+      "reason": "Identifying the approver could move to ready-state or directly to review."
+    },
+    {
+      "from_state": "intake",
+      "event": "approver_missing",
+      "candidates": ["human_review"],
+      "reason": "Probably needs human resolution; spec is silent."
+    }
+  ]
+}

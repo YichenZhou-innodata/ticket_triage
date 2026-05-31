@@ -1,0 +1,201 @@
+"""schema.py
+
+Pydantic v2 models for the access-request ticket state, reconciled from the
+abstract state shape and the concrete ABP-1007 example in
+`access_issue_state_machine.md`.
+
+Reconciliation rules (concrete > abstract, per PR brief):
+
+- ``bug_id`` (abstract) -> ``issue_id`` (concrete).
+- ``category`` (abstract) -> ``primary_category`` (concrete).
+- ``flags`` object (abstract) dropped: concrete keeps ``requires_human_review``
+  at the top level and ``required`` inside ``approval``. ``is_blocked`` and
+  ``is_duplicate_candidate`` are not modeled; downstream code can derive them
+  from ``approval`` and ``duplicate_candidates`` if needed.
+- ``allowed_next_events`` (abstract) dropped: this is a rule-book concern
+  (which events are valid in which state) and lives in the JSON rule book,
+  not on a per-ticket state.
+- ``subcategory`` (abstract) kept as optional. The access_request category
+  has no subcategories in the current spec.
+- ``audit`` (abstract) kept as optional with default ``[]``; concrete omits it.
+- ``recommended_action.target`` (abstract) kept as optional; concrete omits it.
+- ``confidence`` and top-level ``requires_human_review`` are from concrete and
+  are required.
+"""
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ticket_triage.enums import (
+    ApprovalStatus,
+    EntityField,
+    Event,
+    PrimaryCategory,
+    RecommendedActionType,
+    State,
+)
+
+
+class Entities(BaseModel):
+    """Extracted entity fields for an access-request ticket.
+
+    All fields default to empty: the agent may emit partial entities, and the
+    rule book's ``required_fields`` list (compared against this object) is
+    what decides whether the ticket is missing information.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(default="", description="Reporter's full name.")
+    employee_id: str = Field(
+        default="",
+        description="Employee ID; empty string means not yet provided.",
+    )
+    portfolio: str = Field(default="", description="Project portfolio.")
+    region: str = Field(default="", description="Region code, e.g. 'EMEA'.")
+    user_role: str = Field(
+        default="", description="Role the user is requesting, e.g. 'Viewer'."
+    )
+    project_type: str = Field(
+        default="", description="Project type, e.g. 'pre-planning'."
+    )
+    leads: list[str] = Field(
+        default_factory=list, description="Approving leads, by name or identifier."
+    )
+    additional_context: str = Field(
+        default="", description="Free-text additional context from the reporter."
+    )
+
+
+class Approval(BaseModel):
+    """Approval workflow state for an access-request ticket."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    required: bool = Field(
+        ..., description="Whether approver sign-off is required to advance this ticket."
+    )
+    approver: str | None = Field(
+        default=None,
+        description="Name or identifier of the approver, if known.",
+    )
+    status: ApprovalStatus = Field(
+        default=ApprovalStatus.NOT_REQUESTED,
+        description="Current approval status.",
+    )
+
+
+class DuplicateCandidate(BaseModel):
+    """A candidate duplicate ticket surfaced by the duplicate-check step.
+
+    NOTE: The spec only references duplicates as an empty list in the
+    ABP-1007 example; it does not define the shape of a populated entry.
+    These three fields are a provisional shape pending Yichen sign-off.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str = Field(
+        ..., description="Issue identifier of the candidate duplicate ticket."
+    )
+    similarity_score: float | None = Field(
+        default=None,
+        description="Provisional similarity score (0-1). Spec undefined.",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Provisional short rationale for the match. Spec undefined.",
+    )
+
+
+class RecommendedAction(BaseModel):
+    """A next-step action the agent is recommending for human review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: RecommendedActionType = Field(
+        ..., description="The kind of action the agent is recommending."
+    )
+    target: str | None = Field(
+        default=None,
+        description="Optional target (team, role, or person) for the action.",
+    )
+    message: str = Field(
+        ..., description="Human-readable message accompanying the recommendation."
+    )
+
+
+class AuditEntry(BaseModel):
+    """One row of the state-machine audit trail."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: Event = Field(..., description="Event that caused the transition.")
+    from_state: State = Field(..., description="State before the transition.")
+    to_state: State = Field(..., description="State after the transition.")
+    reason: str = Field(
+        ..., description="Short rationale generated by the agent for the transition."
+    )
+
+
+# Module-level type aliases for readability in downstream code.
+MissingFields = list[EntityField]
+DuplicateCandidates = list[DuplicateCandidate]
+AuditTrail = list[AuditEntry]
+
+
+class TicketState(BaseModel):
+    """The full machine-readable state of one ticket at one point in time.
+
+    Field names follow the ABP-1007 concrete example; see the module
+    docstring for the abstract-vs-concrete reconciliation log.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    issue_id: str = Field(
+        ..., description="Ticket identifier in the source tracker (e.g. 'ABP-1007')."
+    )
+    rulebook: str = Field(
+        ...,
+        description="Rule-book version this state was evaluated against, e.g. 'access_request_v1'.",
+    )
+    state: State = Field(..., description="Current triage state.")
+    primary_category: PrimaryCategory = Field(
+        ..., description="Primary category from the rule book."
+    )
+    subcategory: str | None = Field(
+        default=None,
+        description="Optional subcategory; the access_request category has none in the current spec.",
+    )
+    entities: Entities = Field(
+        ..., description="Extracted entity fields for the ticket."
+    )
+    missing_fields: MissingFields = Field(
+        default_factory=list,
+        description="Required entity fields not yet provided by the reporter.",
+    )
+    duplicate_candidates: DuplicateCandidates = Field(
+        default_factory=list,
+        description="Tickets the agent thinks may be duplicates of this one.",
+    )
+    approval: Approval = Field(..., description="Approval workflow state.")
+    last_event: Event = Field(
+        ..., description="The most recent event applied to this ticket."
+    )
+    recommended_action: RecommendedAction = Field(
+        ..., description="Agent-recommended next action for human review."
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Agent confidence in the recommendation, 0.0 to 1.0.",
+    )
+    requires_human_review: bool = Field(
+        ...,
+        description="Whether a human must review before any recommended action is applied.",
+    )
+    audit: AuditTrail = Field(
+        default_factory=list,
+        description="Audit trail of past state transitions for this ticket.",
+    )
