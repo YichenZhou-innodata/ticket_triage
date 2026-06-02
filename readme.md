@@ -283,6 +283,12 @@ The intern should understand that the LLM is not the whole system. The LLM is pa
    pip install -r requirements.txt
    ```
 
+   For running tests, also install dev dependencies:
+
+   ```text
+   pip install -r requirements-dev.txt
+   ```
+
 4. Configure the Google API key:
 
    ```text
