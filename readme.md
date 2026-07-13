@@ -64,41 +64,47 @@ It does **not** automatically rewrite the rule book yet. It only proposes change
 
 The most important idea in this project is that ticket triage is modeled as a **state machine**.
 
-A ticket moves through states like:
+For the `access_request` category, a clean request with all fields present and no duplicate takes the short happy path:
 
 ```text
-intake
-→ classification
-→ duplicate_check
-→ required_info_review
-→ action_recommendation
-→ human_review
+new → intake → ready_for_access_review → approver_review
+    → access_provisioning → verification → resolved
 ```
 
-Each state answers a specific question.
+Other states are entered only when an event calls for them:
 
-For example:
+```text
+from intake:   → missing_info       (required fields are missing)
+               → duplicate_review   (a likely duplicate was found)
+any time:      → stale_waiting_for_user, human_review
+terminal:      resolved, closed, denied
+```
 
-- `intake`: What information did the user provide?
-- `classification`: What kind of ticket is this?
-- `duplicate_check`: Does this look like an existing ticket?
-- `required_info_review`: Are we missing required fields?
-- `action_recommendation`: What should happen next?
-- `human_review`: Should a human approve the recommendation?
+So `missing_info` and `duplicate_review` are possible states a ticket may branch into, not required stops on the happy path.
+
+Each state answers a specific question:
+
+- `new` / `intake`: What information did the user provide, and what kind of ticket is this?
+- `missing_info`: Are we missing required fields? (only if something is missing)
+- `duplicate_review`: Does this look like an existing ticket? (only if a candidate was found)
+- `ready_for_access_review` → `approver_review`: Is approval needed, and who approves?
+- `access_provisioning` → `verification`: Has access been granted, and does it work?
+- `human_review`: Should a human take over before any action is applied?
 
 ---
 
 **The Rule Book**
 
-The rule book is stored as markdown:
+The triage logic is authored by a human as a markdown spec and mirrored in a machine-readable JSON rule book that the code loads:
 
 ```text
-ticket_triage/templates/state_machine.v1.md
+access_issue_state_machine.md                    # human-authored source of truth
+ticket_triage/templates/access_request_v1.json   # derived, machine-loadable rule book
 ```
 
-This file defines the system's triage logic.
+Markdown is the source of truth; the JSON is kept in sync with it (see [ADR 0001](docs/decisions/0001-rulebook-format.md)).
 
-It contains:
+Together they define the system's triage logic, containing:
 
 - available states
 - primary categories
@@ -108,7 +114,7 @@ It contains:
 - clarification prompts
 - final review behavior
 
-Think of it as the system's operating manual.
+Think of them as the system's operating manual.
 
 The code does not hard-code all decisions. Instead, it loads the rule book and uses it to decide what information is required and what action should be recommended.
 
@@ -307,23 +313,34 @@ The Vertex AI path is also supported via `GOOGLE_GENAI_USE_VERTEXAI=TRUE` plus `
 ticket_triage/
 ├── ticket_triage/
 │   ├── __init__.py
-│   ├── agent.py                       # ticket_executor_agent, template_evolution_agent
-│   ├── schema.py                      # data models (tickets, categories, actions, etc.)
-│   ├── domain/
+│   ├── enums.py                       # State / Event / Action / Entity vocabulary
+│   ├── schema.py                      # Pydantic models: TicketState, Entities, Approval, etc.
+│   ├── rulebook.py                    # loads + validates rule book JSON files
+│   ├── agent.py                       # ADK agent wiring (skeleton — built)
+│   ├── domain/                        # classification / recommendation / evolution
 │   │   ├── __init__.py
-│   │   ├── classification.py          # primary + subcategory classification
-│   │   ├── recommendation.py          # state/action flow + next-action recommendation
-│   │   └── evolution.py               # historical-ticket analysis + rule-book proposals
+│   │   ├── classification.py          # (skeleton — built)
+│   │   ├── recommendation.py          # (skeleton — built)
+│   │   └── evolution.py               # (planned)
 │   ├── templates/
-│   │   └── state_machine.v1.json      # the rule book (planned)
+│   │   └── access_request_v1.json     # machine-readable rule book (derived from spec)
 │   └── data/
-│       └── sample_tickets.jsonl       # seed historical examples (planned)
+│       └── sample_tickets.jsonl       # 10 sample tickets covering 10 scenarios
 ├── tests/
-│   └── __init__.py
+│   ├── __init__.py
+│   ├── test_schema.py
+│   ├── test_rulebook.py
+│   └── test_sample_tickets.py
+├── docs/
+│   └── decisions/
+│       └── 0001-rulebook-format.md    # ADR: markdown source of truth, JSON derived
+├── access_issue_state_machine.md      # Yichen's markdown spec (source of truth)
+├── ARCHITECTURE.md                    # architecture, diagrams, open questions
 ├── readme.md
 ├── CONTRIBUTING.md
 ├── CLAUDE.md
 ├── requirements.txt
+├── requirements-dev.txt
 ├── .env.example
 └── .gitignore
 ```
@@ -350,7 +367,7 @@ ticket_triage/schema.py
 Defines the data models: tickets, categories, entities, actions, templates, and outputs.
 
 ```text
-ticket_triage/templates/state_machine.v1.json
+ticket_triage/templates/access_request_v1.json
 ```
 
 The rule book.
@@ -385,6 +402,7 @@ Seed examples that simulate historical tickets.
 
 - [CONTRIBUTING.md](CONTRIBUTING.md) — branch naming, commit conventions, docstring requirements, PR process.
 - [CLAUDE.md](CLAUDE.md) — guidance for AI assistants (Claude Code and similar) working in this repo.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system overview, state-machine diagram, component diagram, and current open questions.
 
 ---
 
