@@ -86,7 +86,7 @@ using the rule book and the LLM-backed classification agent.
 Every public function and method has a docstring documenting **args, returns, and raises**. Use Google-style docstrings to match the Google SDK ecosystem.
 
 ```python
-def classify_ticket(ticket: Ticket, rulebook: RuleBook) -> Classification:
+def classify_ticket(ticket: TicketState, rulebook: Rulebook) -> PrimaryCategory:
     """Classify a single ticket against the active rule book.
 
     Args:
@@ -94,10 +94,10 @@ def classify_ticket(ticket: Ticket, rulebook: RuleBook) -> Classification:
         rulebook: The loaded rule book defining categories and required fields.
 
     Returns:
-        A Classification with primary_category, optional subcategory, and confidence.
+        A PrimaryCategory identifying the ticket's top-level category.
 
     Raises:
-        RuleBookError: If the rule book is missing a required category definition.
+        ValueError: If the ticket cannot be matched to any known category.
     """
 ```
 

@@ -12,9 +12,9 @@ Read these, in order, before suggesting anything:
 
 1. [readme.md](readme.md) — project background, architecture, state-machine design, rule-book concept, examples.
 2. [CONTRIBUTING.md](CONTRIBUTING.md) — branch naming, commit conventions, docstring requirements, PR process.
-3. `ticket_triage/templates/state_machine.v1.json` — the rule book (once it exists). This is the source of truth for categories, subcategories, required fields, and allowed actions.
+3. `ticket_triage/templates/access_request_v1.json` — the machine-loadable rule book. It is mirrored from the human-authored spec `access_issue_state_machine.md`; see [ADR 0001](docs/decisions/0001-rulebook-format.md) for the source-of-truth policy.
 4. `ticket_triage/schema.py` — the Pydantic models that define the contract between the rule book, the agents, and the rest of the code.
-5. `ticket_triage/agent.py` — how the two ADK agents are wired up.
+5. `ticket_triage/agent.py` — the ADK agent wiring (skeleton exists; Arya's lane).
 
 If a file you need is missing, the repo is still being scaffolded — check `git log` and recent branches to see what's in flight.
 
@@ -32,7 +32,7 @@ These are the rules in [CONTRIBUTING.md](CONTRIBUTING.md). Summary:
 
 ## What To DO Before Suggesting Code
 
-1. **Read the rule book.** If the change involves categories, subcategories, required fields, routing, or actions, the answer probably belongs in `ticket_triage/templates/state_machine.v1.json` — not in Python.
+1. **Read the rule book.** If the change involves categories, subcategories, required fields, routing, or actions, the answer probably belongs in `ticket_triage/templates/access_request_v1.json` — not in Python.
 2. **Read `schema.py`.** It defines the data contract. Touching tickets, classifications, actions, or outputs means touching schemas.
 3. **Check existing patterns.** If a similar function or agent already exists, mirror its style. Don't introduce a second way to do the same thing.
 4. **Check for an in-progress branch.** Run `git branch -a` and `git log --all --oneline -20`. Another intern may already be working on what you're about to propose.
@@ -52,7 +52,7 @@ These are the rules in [CONTRIBUTING.md](CONTRIBUTING.md). Summary:
 
 Stop and ask when the change touches any of these:
 
-- **The rule book schema** (the shape of `state_machine.v1.json`, not just its contents). Schema changes ripple to `schema.py`, both agents, and any tests.
+- **The rule book schema** (the shape of `access_request_v1.json`, not just its contents). Schema changes ripple to `schema.py`, both agents, and any tests.
 - **Agent prompts or system instructions.** Prompt changes affect model output quality and are hard to A/B test mid-PR. Get a human sign-off on the wording.
 - **Public function signatures.** Renaming a parameter or changing a return type is a breaking change for everyone else's WIP code. Coordinate first.
 - **Choice of model or API path** (Gemini Developer API vs. Vertex AI, model version, temperature). These are budget and compliance decisions, not engineering ones.
