@@ -6,10 +6,10 @@ rule books for additional categories.
 """
 
 from ticket_triage.enums import PrimaryCategory
-from ticket_triage.rulebook import RuleBook
+from ticket_triage.rulebook import Rulebook
 
 
-def classify_ticket(ticket_text: str, rulebook: RuleBook) -> PrimaryCategory:
+def classify_ticket(ticket_text: str, rulebook: Rulebook) -> PrimaryCategory:
     """Classify a single ticket into a primary category.
 
     Args:
