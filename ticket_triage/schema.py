@@ -21,6 +21,22 @@ Reconciliation rules (concrete > abstract, per PR brief):
 - ``recommended_action.target`` (abstract) kept as optional; concrete omits it.
 - ``confidence`` and top-level ``requires_human_review`` are from concrete and
   are required.
+
+Validation policy (audit-driven):
+
+- All models use ``extra="forbid"`` — unknown JSON keys are rejected.
+- Numeric and boolean fields where silent coercion would be dangerous
+  (``confidence``, ``requires_human_review``, ``Approval.required``,
+  ``DuplicateCandidate.similarity_score``) declare ``strict=True`` at the
+  field level so "0.5" (str) is not accepted for a float and 1 is not
+  accepted for a bool. Enum fields deliberately stay lax so a JSON string
+  like ``"intake"`` still resolves to ``State.INTAKE``.
+- String fields that carry identifiers have ``min_length=1`` so empty
+  strings do not slip through. Fields where empty is a meaningful
+  "not extracted yet" value (like most `Entities` fields) allow empty
+  strings but still enforce a max length so a 10 MB payload cannot pass.
+- List fields have ``max_length`` bounds so an unbounded audit trail or
+  hundreds of thousands of duplicate candidates cannot pass.
 """
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -35,34 +51,70 @@ from ticket_triage.enums import (
 )
 
 
+# Generous per-field length ceilings. These are guard rails against
+# accidental or malicious payload bloat, not business rules.
+_MAX_ID = 200
+_MAX_SHORT_STRING = 200
+_MAX_MEDIUM_STRING = 500
+_MAX_MESSAGE = 10_000
+_MAX_LIST_SMALL = 20
+_MAX_LIST_MEDIUM = 100
+_MAX_LIST_LARGE = 1000
+
+
 class Entities(BaseModel):
     """Extracted entity fields for an access-request ticket.
 
     All fields default to empty: the agent may emit partial entities, and the
     rule book's ``required_fields`` list (compared against this object) is
     what decides whether the ticket is missing information.
+
+    Empty strings are permitted (they mean "not extracted yet") but a hard
+    max length is enforced on every field so oversized payloads are rejected
+    at the schema boundary.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(default="", description="Reporter's full name.")
+    name: str = Field(
+        default="",
+        max_length=_MAX_MEDIUM_STRING,
+        description="Reporter's full name.",
+    )
     employee_id: str = Field(
         default="",
+        max_length=_MAX_ID,
         description="Employee ID; empty string means not yet provided.",
     )
-    portfolio: str = Field(default="", description="Project portfolio.")
-    region: str = Field(default="", description="Region code, e.g. 'EMEA'.")
+    portfolio: str = Field(
+        default="",
+        max_length=_MAX_SHORT_STRING,
+        description="Project portfolio.",
+    )
+    region: str = Field(
+        default="",
+        max_length=_MAX_SHORT_STRING,
+        description="Region code, e.g. 'EMEA'.",
+    )
     user_role: str = Field(
-        default="", description="Role the user is requesting, e.g. 'Viewer'."
+        default="",
+        max_length=_MAX_SHORT_STRING,
+        description="Role the user is requesting, e.g. 'Viewer'.",
     )
     project_type: str = Field(
-        default="", description="Project type, e.g. 'pre-planning'."
+        default="",
+        max_length=_MAX_SHORT_STRING,
+        description="Project type, e.g. 'pre-planning'.",
     )
     leads: list[str] = Field(
-        default_factory=list, description="Approving leads, by name or identifier."
+        default_factory=list,
+        max_length=_MAX_LIST_SMALL,
+        description="Approving leads, by name or identifier.",
     )
     additional_context: str = Field(
-        default="", description="Free-text additional context from the reporter."
+        default="",
+        max_length=_MAX_MESSAGE,
+        description="Free-text additional context from the reporter.",
     )
 
 
@@ -72,10 +124,13 @@ class Approval(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     required: bool = Field(
-        ..., description="Whether approver sign-off is required to advance this ticket."
+        ...,
+        strict=True,
+        description="Whether approver sign-off is required to advance this ticket.",
     )
     approver: str | None = Field(
         default=None,
+        max_length=_MAX_MEDIUM_STRING,
         description="Name or identifier of the approver, if known.",
     )
     status: ApprovalStatus = Field(
@@ -95,14 +150,21 @@ class DuplicateCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     issue_id: str = Field(
-        ..., description="Issue identifier of the candidate duplicate ticket."
+        ...,
+        min_length=1,
+        max_length=_MAX_ID,
+        description="Issue identifier of the candidate duplicate ticket.",
     )
     similarity_score: float | None = Field(
         default=None,
+        strict=True,
+        ge=0.0,
+        le=1.0,
         description="Provisional similarity score (0-1). Spec undefined.",
     )
     reason: str | None = Field(
         default=None,
+        max_length=_MAX_MESSAGE,
         description="Provisional short rationale for the match. Spec undefined.",
     )
 
@@ -117,10 +179,14 @@ class RecommendedAction(BaseModel):
     )
     target: str | None = Field(
         default=None,
+        max_length=_MAX_MEDIUM_STRING,
         description="Optional target (team, role, or person) for the action.",
     )
     message: str = Field(
-        ..., description="Human-readable message accompanying the recommendation."
+        ...,
+        min_length=1,
+        max_length=_MAX_MESSAGE,
+        description="Human-readable message accompanying the recommendation.",
     )
 
 
@@ -133,7 +199,10 @@ class AuditEntry(BaseModel):
     from_state: State = Field(..., description="State before the transition.")
     to_state: State = Field(..., description="State after the transition.")
     reason: str = Field(
-        ..., description="Short rationale generated by the agent for the transition."
+        ...,
+        min_length=1,
+        max_length=_MAX_MESSAGE,
+        description="Short rationale generated by the agent for the transition.",
     )
 
 
@@ -153,11 +222,19 @@ class TicketState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     issue_id: str = Field(
-        ..., description="Ticket identifier in the source tracker (e.g. 'ABP-1007')."
+        ...,
+        min_length=1,
+        max_length=_MAX_ID,
+        description="Ticket identifier in the source tracker (e.g. 'ABP-1007').",
     )
     rulebook: str = Field(
         ...,
-        description="Rule-book version this state was evaluated against, e.g. 'access_request_v1'.",
+        min_length=1,
+        max_length=_MAX_SHORT_STRING,
+        description=(
+            "Rule-book version this state was evaluated against, e.g. "
+            "'access_request_v1'."
+        ),
     )
     state: State = Field(..., description="Current triage state.")
     primary_category: PrimaryCategory = Field(
@@ -165,17 +242,23 @@ class TicketState(BaseModel):
     )
     subcategory: str | None = Field(
         default=None,
-        description="Optional subcategory; the access_request category has none in the current spec.",
+        max_length=_MAX_SHORT_STRING,
+        description=(
+            "Optional subcategory; the access_request category has none in "
+            "the current spec."
+        ),
     )
     entities: Entities = Field(
         ..., description="Extracted entity fields for the ticket."
     )
     missing_fields: MissingFields = Field(
         default_factory=list,
+        max_length=_MAX_LIST_SMALL,
         description="Required entity fields not yet provided by the reporter.",
     )
     duplicate_candidates: DuplicateCandidates = Field(
         default_factory=list,
+        max_length=_MAX_LIST_MEDIUM,
         description="Tickets the agent thinks may be duplicates of this one.",
     )
     approval: Approval = Field(..., description="Approval workflow state.")
@@ -187,15 +270,18 @@ class TicketState(BaseModel):
     )
     confidence: float = Field(
         ...,
+        strict=True,
         ge=0.0,
         le=1.0,
         description="Agent confidence in the recommendation, 0.0 to 1.0.",
     )
     requires_human_review: bool = Field(
         ...,
+        strict=True,
         description="Whether a human must review before any recommended action is applied.",
     )
     audit: AuditTrail = Field(
         default_factory=list,
+        max_length=_MAX_LIST_LARGE,
         description="Audit trail of past state transitions for this ticket.",
     )

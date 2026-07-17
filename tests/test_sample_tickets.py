@@ -13,9 +13,13 @@ g. Approval denied
 h. Stale (no user response)
 i. Reopened (audit shows prior closure + reopen)
 j. Ambiguous edge case (low confidence)
+
+Loading is delegated to `ticket_triage.sample_tickets.load_sample_tickets`,
+which fails soft per-line. Since the shipped JSONL is a committed artifact,
+`test_no_skipped_lines_in_shipped_file` asserts that zero lines are skipped
+against it — invalid rows would fail loudly in that test, not silently.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -27,6 +31,7 @@ from ticket_triage.enums import (
     PrimaryCategory,
     State,
 )
+from ticket_triage.sample_tickets import LoadResult, load_sample_tickets
 from ticket_triage.schema import TicketState
 
 
@@ -38,25 +43,19 @@ SAMPLE_PATH: Path = (
 )
 
 
-def _load_raw_tickets() -> list[dict]:
-    """Parse the JSONL file into a list of plain dicts (no schema validation)."""
-    raw_lines = SAMPLE_PATH.read_text(encoding="utf-8").splitlines()
-    return [json.loads(line) for line in raw_lines if line.strip()]
+@pytest.fixture(scope="module")
+def load_result() -> LoadResult:
+    """Module-scoped fixture: load the shipped JSONL once."""
+    return load_sample_tickets(SAMPLE_PATH, warn=False)
 
 
 @pytest.fixture(scope="module")
-def raw_tickets() -> list[dict]:
-    """Module-scoped fixture returning unvalidated ticket dicts."""
-    return _load_raw_tickets()
+def tickets(load_result: LoadResult) -> list[TicketState]:
+    """Module-scoped fixture: the successfully-loaded tickets."""
+    return load_result.tickets
 
 
-@pytest.fixture(scope="module")
-def tickets(raw_tickets: list[dict]) -> list[TicketState]:
-    """Module-scoped fixture returning validated TicketState models."""
-    return [TicketState.model_validate(d) for d in raw_tickets]
-
-
-# -- File presence & basic shape --------------------------------------------
+# -- File presence & shape --------------------------------------------------
 
 
 def test_sample_file_exists() -> None:
@@ -64,21 +63,24 @@ def test_sample_file_exists() -> None:
     assert SAMPLE_PATH.is_file(), f"Missing sample file at {SAMPLE_PATH}"
 
 
+def test_no_skipped_lines_in_shipped_file(load_result: LoadResult) -> None:
+    """
+    The shipped JSONL is a committed artifact: every line MUST validate.
+    If this fails, a row in sample_tickets.jsonl has become invalid.
+    """
+    if load_result.skipped_count > 0:
+        detail = "\n".join(
+            f"  line {s.line_number}: {s.reason}" for s in load_result.skipped
+        )
+        pytest.fail(
+            f"{load_result.skipped_count} of {load_result.total_seen} rows "
+            f"in sample_tickets.jsonl failed to load:\n{detail}"
+        )
+
+
 def test_at_least_ten_tickets(tickets: list[TicketState]) -> None:
     """The PR scope calls for ~10 tickets covering all 10 scenarios."""
     assert len(tickets) >= 10, f"Expected at least 10 tickets, got {len(tickets)}"
-
-
-def test_each_ticket_validates(raw_tickets: list[dict]) -> None:
-    """Every JSON line parses as a valid TicketState."""
-    for index, raw in enumerate(raw_tickets):
-        try:
-            TicketState.model_validate(raw)
-        except Exception as exc:
-            pytest.fail(
-                f"Ticket at index {index} (issue_id={raw.get('issue_id')}) "
-                f"failed validation: {exc}"
-            )
 
 
 # -- Cross-ticket invariants -------------------------------------------------
