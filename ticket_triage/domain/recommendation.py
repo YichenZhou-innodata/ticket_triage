@@ -1,53 +1,28 @@
 """recommendation.py
 
-Picks the next recommended action for a ticket
+Walks the state machine and picks the next recommended action for a ticket
 based on its current state and extracted entities.
 """
 
-from ticket_triage.enums import (
-    EntityField,
-    Event,
-    RecommendedActionType,
-    State,
-)
-from ticket_triage.schema import (
-    Entities,
-    RecommendedAction,
-    TicketState,
-)
 
-
-def get_next_action(ticket_state: TicketState) -> RecommendedAction:
+def get_next_action(missing_fields: str, has_duplicates: bool, current_state: str) -> str:
     """Determine the next recommended action for a ticket.
 
     Args:
-        ticket_state: The current state of the ticket.
+        missing_fields: Comma-separated list of missing required fields, or empty string if none.
+        has_duplicates: Whether duplicate tickets were found.
+        current_state: The current state of the ticket.
 
     Returns:
-        A RecommendedAction with the suggested next step.
-
-    Raises:
-        ValueError: If the ticket is in an unhandled state.
+        A string describing the recommended next action.
     """
-    if ticket_state.missing_fields:
-        return RecommendedAction(
-            type=RecommendedActionType.ASK_FOR_MISSING_INFO,
-            message=f"Missing required fields: {', '.join(ticket_state.missing_fields)}",
-        )
+    if missing_fields:
+        return f"ASK_FOR_MISSING_INFO: Missing required fields: {missing_fields}"
 
-    if ticket_state.duplicate_candidates:
-        return RecommendedAction(
-            type=RecommendedActionType.SUGGEST_DUPLICATE_REVIEW,
-            message="Possible duplicate tickets found. Please review before proceeding.",
-        )
+    if has_duplicates:
+        return "SUGGEST_DUPLICATE_REVIEW: Possible duplicate tickets found. Please review before proceeding."
 
-    if ticket_state.state == State.INTAKE:
-        return RecommendedAction(
-            type=RecommendedActionType.REQUEST_APPROVAL,
-            message="All required fields present. Ready to route for approval.",
-        )
+    if current_state == "intake":
+        return "REQUEST_APPROVAL: All required fields present. Ready to route for approval."
 
-    return RecommendedAction(
-        type=RecommendedActionType.ESCALATE_TO_HUMAN,
-        message=f"Unhandled state: {ticket_state.state}. Escalating to human review.",
-    )
+    return f"ESCALATE_TO_HUMAN: Unhandled state: {current_state}. Escalating to human review."
