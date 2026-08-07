@@ -11,7 +11,9 @@ from ticket_triage.domain.recommendation import get_next_action
 
 root_agent = LlmAgent(
     name="ticket_executor",
-    model="gemini-2.0-flash",
+    # gemini-2.0-flash returns 429 limit:0 on this project's free tier.
+    # gemini-flash-latest is the ADK-recommended alias with working quota.
+    model="gemini-flash-latest",
     description="Triages IT support tickets.",
     instruction="""
         You are a ticket triage agent. When given a ticket:
