@@ -11,6 +11,7 @@ from ticket_triage.enums import (
     State,
 )
 from ticket_triage.schema import (
+    AuditEntry,
     Entities,
     RecommendedAction,
     TicketState,
@@ -29,25 +30,53 @@ def get_next_action(ticket_state: TicketState) -> RecommendedAction:
     Raises:
         ValueError: If the ticket is in an unhandled state.
     """
+    # v1 copilot invariant: every recommendation is subject to human review.
+    # Override whatever the caller supplied — the flag is a policy, not a hint.
+    # NOTE: this enforces the invariant at the tool boundary. The LLM composes
+    # its user-visible summary from its own constructed state, so the rendered
+    # output may still show whatever the model decided. Closing that gap needs
+    # a separate change (surfacing the flag in the tool return or the message
+    # text) — out of scope for this fix.
+    ticket_state.requires_human_review = True
+
     if ticket_state.missing_fields:
-        return RecommendedAction(
+        branch = "missing_fields"
+        action = RecommendedAction(
             type=RecommendedActionType.ASK_FOR_MISSING_INFO,
             message=f"Missing required fields: {', '.join(ticket_state.missing_fields)}",
         )
-
-    if ticket_state.duplicate_candidates:
-        return RecommendedAction(
+    elif ticket_state.duplicate_candidates:
+        branch = "duplicate_candidates"
+        action = RecommendedAction(
             type=RecommendedActionType.SUGGEST_DUPLICATE_REVIEW,
             message="Possible duplicate tickets found. Please review before proceeding.",
         )
-
-    if ticket_state.state == State.INTAKE:
-        return RecommendedAction(
+    elif ticket_state.state == State.INTAKE:
+        branch = "intake_state"
+        action = RecommendedAction(
             type=RecommendedActionType.REQUEST_APPROVAL,
             message="All required fields present. Ready to route for approval.",
         )
+    else:
+        branch = "fallthrough"
+        action = RecommendedAction(
+            type=RecommendedActionType.ESCALATE_TO_HUMAN,
+            message=f"Unhandled state: {ticket_state.state}. Escalating to human review.",
+        )
 
-    return RecommendedAction(
-        type=RecommendedActionType.ESCALATE_TO_HUMAN,
-        message=f"Unhandled state: {ticket_state.state}. Escalating to human review.",
+    # Log which cascade branch fired so a wrong recommendation is reconstructable.
+    # from_state == to_state because computing a recommendation is not itself a
+    # state transition; the reason string calls this out so a reader does not
+    # mistake these rows for actual state changes.
+    ticket_state.audit.append(
+        AuditEntry(
+            event=ticket_state.last_event,
+            from_state=ticket_state.state,
+            to_state=ticket_state.state,
+            reason=(
+                f"recommendation decision (not a state transition); "
+                f"cascade branch={branch}; action={action.type.value}"
+            ),
+        )
     )
+    return action
