@@ -22,8 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from ticket_triage.domain.classification import classify_ticket
-from ticket_triage.enums import PrimaryCategory
+from ticket_triage.domain.classification import (
+    classify_ticket,
+    escalate_unsupported_ticket,
+)
+from ticket_triage.enums import PrimaryCategory, RecommendedActionType
 from ticket_triage.rulebook import load_rulebook
 
 
@@ -200,3 +203,32 @@ def test_known_limitation_admin_status_update_false_positive(rulebook):
         classify_ticket("our admin approved the design", rulebook)
         is PrimaryCategory.ACCESS_REQUEST
     )
+
+
+# ----------------------------------------------------------------------
+# escalate_unsupported_ticket — the tool the agent calls when
+# classify_ticket returned OTHER (item 1.2)
+# ----------------------------------------------------------------------
+
+
+def test_escalate_unsupported_ticket_returns_escalate_to_human_type():
+    """The escalation tool returns action type ESCALATE_TO_HUMAN."""
+    result = escalate_unsupported_ticket("some bug report text")
+    assert result.type is RecommendedActionType.ESCALATE_TO_HUMAN
+
+
+def test_escalate_unsupported_ticket_message_mentions_human_review():
+    """The escalation message must make the human-review outcome clear."""
+    result = escalate_unsupported_ticket("some bug report text")
+    lowered = result.message.lower()
+    assert "human" in lowered or "review" in lowered
+    assert len(result.message) > 20
+
+
+def test_escalate_unsupported_ticket_ignores_input_text():
+    """The current implementation does not inspect ticket_text — the
+    signature accepts it for stability and future use only."""
+    r1 = escalate_unsupported_ticket("bug in the export feature")
+    r2 = escalate_unsupported_ticket("completely different content")
+    assert r1.message == r2.message
+    assert r1.type == r2.type

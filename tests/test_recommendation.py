@@ -24,8 +24,21 @@ from pathlib import Path
 import pytest
 
 from ticket_triage.domain.recommendation import get_next_action
-from ticket_triage.enums import RecommendedActionType
-from ticket_triage.schema import TicketState
+from ticket_triage.enums import (
+    ApprovalStatus,
+    EntityField,
+    Event,
+    PrimaryCategory,
+    RecommendedActionType,
+    State,
+)
+from ticket_triage.schema import (
+    Approval,
+    DuplicateCandidate,
+    Entities,
+    RecommendedAction,
+    TicketState,
+)
 
 
 SAMPLE_PATH: Path = (
@@ -214,3 +227,129 @@ def test_sample_009_reopened_intake(tickets_by_id: dict[str, TicketState]) -> No
     _assert_recommendation(
         tickets_by_id, "SAMPLE-009", RecommendedActionType.EXTRACT_FIELDS
     )
+
+
+# ----------------------------------------------------------------------------
+# OTHER-category guard (item 1.2)
+#
+# Defense-in-depth backstop for when the model constructs a TicketState with
+# primary_category=OTHER and calls get_next_action anyway (ignoring the
+# instruction to call escalate_unsupported_ticket instead). The guard at the
+# top of get_next_action must fire an early-return escalation regardless of
+# state, missing_fields, or duplicate_candidates. It must also preserve the
+# requires_human_review invariant and the audit-trail invariant.
+# ----------------------------------------------------------------------------
+
+
+def _minimal_ticket_state_with_category(
+    category: PrimaryCategory, **overrides
+) -> TicketState:
+    """Build a minimal TicketState with the given primary_category.
+
+    Extensible via ``**overrides`` so each guard test can vary the specific
+    field(s) it's exercising (state, missing_fields, duplicate_candidates)
+    without duplicating the whole state construction.
+    """
+    defaults: dict = {
+        "issue_id": "TEST-OTHER",
+        "rulebook": "access_request_v1",
+        "state": State.INTAKE,
+        "primary_category": category,
+        "entities": Entities(),
+        "approval": Approval(required=False, status=ApprovalStatus.NOT_REQUESTED),
+        "last_event": Event.TICKET_CREATED,
+        "recommended_action": RecommendedAction(
+            type=RecommendedActionType.EXTRACT_FIELDS,
+            message="placeholder",
+        ),
+        "confidence": 0.5,
+        "requires_human_review": False,
+    }
+    defaults.update(overrides)
+    return TicketState.model_validate(defaults)
+
+
+def test_other_category_returns_escalation() -> None:
+    """primary_category=OTHER short-circuits to ESCALATE_TO_HUMAN."""
+    ticket_state = _minimal_ticket_state_with_category(PrimaryCategory.OTHER)
+    result = get_next_action(ticket_state)
+    assert result.type is RecommendedActionType.ESCALATE_TO_HUMAN
+
+
+def test_other_category_ignores_missing_fields() -> None:
+    """The guard fires before the missing_fields branch of the cascade.
+
+    Without the guard, missing_fields would trigger ASK_FOR_MISSING_INFO
+    — the exact bug items 1.1/1.2 fix (asking a bug reporter for an
+    employee_id).
+    """
+    ticket_state = _minimal_ticket_state_with_category(
+        PrimaryCategory.OTHER,
+        missing_fields=[EntityField.EMPLOYEE_ID, EntityField.NAME],
+    )
+    result = get_next_action(ticket_state)
+    assert result.type is RecommendedActionType.ESCALATE_TO_HUMAN
+
+
+def test_other_category_ignores_duplicate_candidates() -> None:
+    """The guard fires before the duplicate_candidates branch of the cascade."""
+    ticket_state = _minimal_ticket_state_with_category(
+        PrimaryCategory.OTHER,
+        duplicate_candidates=[DuplicateCandidate(issue_id="DUP-1")],
+    )
+    result = get_next_action(ticket_state)
+    assert result.type is RecommendedActionType.ESCALATE_TO_HUMAN
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        # Cascade has an explicit branch for INTAKE — guard must still win.
+        State.INTAKE,
+        # Cascade's missing_fields branch would normally fire here.
+        State.MISSING_INFO,
+        # Cascade's duplicates branch would normally fire here.
+        State.DUPLICATE_REVIEW,
+        # Terminal state with cascade fallthrough — guard still fires first.
+        State.RESOLVED,
+    ],
+)
+def test_other_category_escalates_regardless_of_state(state: State) -> None:
+    """The guard fires regardless of what state the ticket is in."""
+    ticket_state = _minimal_ticket_state_with_category(
+        PrimaryCategory.OTHER,
+        state=state,
+    )
+    result = get_next_action(ticket_state)
+    assert result.type is RecommendedActionType.ESCALATE_TO_HUMAN
+
+
+def test_other_category_preserves_human_review_flag() -> None:
+    """requires_human_review is set to True on the OTHER path.
+
+    The guard runs AFTER the human-review flag assignment, so an OTHER
+    ticket that reaches get_next_action still gets the flag flipped
+    regardless of what the caller supplied.
+    """
+    ticket_state = _minimal_ticket_state_with_category(
+        PrimaryCategory.OTHER,
+        requires_human_review=False,
+    )
+    get_next_action(ticket_state)
+    assert ticket_state.requires_human_review is True
+
+
+def test_other_category_writes_audit_entry() -> None:
+    """The guard path writes an AuditEntry with OTHER-guard in the reason.
+
+    Preserves the audit-trail invariant that every recommendation
+    decision is recorded, so 1.2's short-circuit is reconstructable
+    from the audit log the same way cascade decisions are.
+    """
+    ticket_state = _minimal_ticket_state_with_category(PrimaryCategory.OTHER)
+    initial_audit_len = len(ticket_state.audit)
+    get_next_action(ticket_state)
+    assert len(ticket_state.audit) == initial_audit_len + 1
+    last_reason = ticket_state.audit[-1].reason
+    assert "OTHER" in last_reason
+    assert "escalate_to_human" in last_reason

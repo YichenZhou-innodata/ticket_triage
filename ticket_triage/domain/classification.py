@@ -79,8 +79,9 @@ and fails to extract entities.
 
 import re
 
-from ticket_triage.enums import PrimaryCategory
+from ticket_triage.enums import PrimaryCategory, RecommendedActionType
 from ticket_triage.rulebook import Rulebook
+from ticket_triage.schema import RecommendedAction
 
 
 _ACCESS_REQUEST_KEYWORDS = (
@@ -135,3 +136,33 @@ def classify_ticket(ticket_text: str, rulebook: Rulebook) -> PrimaryCategory:
     if _ACCESS_REQUEST_PATTERN.search(ticket_text):
         return PrimaryCategory.ACCESS_REQUEST
     return PrimaryCategory.OTHER
+
+
+def escalate_unsupported_ticket(ticket_text: str) -> RecommendedAction:
+    """Return an escalation action for a ticket whose category isn't handled.
+
+    Called by the agent when ``classify_ticket`` returns
+    ``PrimaryCategory.OTHER``. Does not construct a ``TicketState`` —
+    the ticket is not a valid input to the access-request pipeline.
+    The ``RecommendedAction`` of type ``ESCALATE_TO_HUMAN`` is the
+    semantic equivalent of the ``requires_human_review`` invariant
+    ``get_next_action`` enforces on the access-request path.
+
+    Args:
+        ticket_text: The raw ticket text. Accepted for tool-signature
+            stability and for future context in the escalation message
+            (e.g. logging) — the current implementation does not
+            inspect it.
+
+    Returns:
+        A ``RecommendedAction`` of type ``ESCALATE_TO_HUMAN`` with a
+        clear "not supported yet, routed for human review" message.
+    """
+    return RecommendedAction(
+        type=RecommendedActionType.ESCALATE_TO_HUMAN,
+        message=(
+            "This ticket does not appear to be an access request. "
+            "The automated triage system does not handle this ticket "
+            "type yet; routing to a human for review."
+        ),
+    )

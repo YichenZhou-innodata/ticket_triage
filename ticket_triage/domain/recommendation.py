@@ -7,6 +7,7 @@ based on its current state and extracted entities.
 from ticket_triage.enums import (
     EntityField,
     Event,
+    PrimaryCategory,
     RecommendedActionType,
     State,
 )
@@ -38,6 +39,39 @@ def get_next_action(ticket_state: TicketState) -> RecommendedAction:
     # a separate change (surfacing the flag in the tool return or the message
     # text) — out of scope for this fix.
     ticket_state.requires_human_review = True
+
+    # OTHER-category guard — defense-in-depth backstop for item 1.2 of
+    # REMAINING_WORK.md. When the classifier returns PrimaryCategory.OTHER
+    # (a ticket that isn't an access request), the instruction tells the
+    # model to call escalate_unsupported_ticket instead of get_next_action.
+    # If the model ignores that instruction and calls get_next_action anyway,
+    # this early return prevents the cascade from asking a bug reporter for
+    # their employee_id (the exact original bug items 1.1/1.2 fix).
+    #
+    # Kept strictly as an early return before the cascade — the cascade
+    # branches below are unchanged. Preserves the audit-trail invariant by
+    # appending an AuditEntry before returning, so every recommendation
+    # decision is recorded uniformly.
+    if ticket_state.primary_category is PrimaryCategory.OTHER:
+        other_action = RecommendedAction(
+            type=RecommendedActionType.ESCALATE_TO_HUMAN,
+            message=(
+                "Ticket category is not access_request; escalating to "
+                "human review without running the access-request cascade."
+            ),
+        )
+        ticket_state.audit.append(
+            AuditEntry(
+                event=ticket_state.last_event,
+                from_state=ticket_state.state,
+                to_state=ticket_state.state,
+                reason=(
+                    "recommendation decision (not a state transition); "
+                    "OTHER-category guard; action=escalate_to_human"
+                ),
+            )
+        )
+        return other_action
 
     if ticket_state.missing_fields:
         branch = "missing_fields"
