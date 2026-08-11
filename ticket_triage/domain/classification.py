@@ -1,12 +1,143 @@
 """classification.py
 
-Classifies an incoming ticket into a PrimaryCategory using the loaded
-rule book. Currently supports access_request only; extend by adding
-rule books for additional categories.
+Classifies an incoming ticket into a ``PrimaryCategory``.
+
+v1: rule-based keyword matching. Deterministic, testable without
+quota, predictable in a demo. If the ticket text contains any of a
+small set of access-request signal words, returns ``ACCESS_REQUEST``;
+otherwise returns ``OTHER``.
+
+Design tradeoffs — READ THIS BEFORE CHANGING THE KEYWORD SET
+=============================================================
+
+The keyword set has two parts:
+
+1. **Verb / concept words** (``access``, ``permission``,
+   ``permissions``, ``credentials``, ``login``, ``grant``,
+   ``provision``, ``authorize``, ``authorization``). Unambiguous
+   access-request signals; the false-positive surface is small.
+
+2. **Role-level names** (``editor``, ``viewer``, ``admin``).
+   Added because roughly 30% of the sample access-request tickets
+   signal via a role name rather than the word "access" — e.g.
+   ``"Editor on the M&A deal book"`` or
+   ``"needs editor on the modeling workbook"``. Without these,
+   the classifier misses common natural phrasings that a real
+   reporter would write.
+
+   **Known false positives from this addition** (pure keyword
+   matching cannot distinguish these — the word is identical, only
+   context differs):
+
+   - ``"the text editor keeps crashing"`` → matches ``editor`` →
+     ``ACCESS_REQUEST``. Actually a bug report about text-editing
+     software.
+   - ``"our admin approved the design"`` → matches ``admin`` →
+     ``ACCESS_REQUEST``. Actually a status update mentioning an
+     administrator.
+
+   These are represented as expected-behavior tests in
+   ``tests/test_classification.py`` (search for
+   ``test_known_limitation``) so the tradeoff is visible to anyone
+   who later "fixes" the tests without understanding why they exist.
+
+3. **``analyst`` and ``reviewer`` deliberately excluded** — they
+   read as job titles ("we need a new analyst") at least as often
+   as they read as permission levels. ``editor`` / ``viewer`` /
+   ``admin`` are unambiguously permission levels in this domain.
+
+Escalation does NOT catch these false positives
+------------------------------------------------
+
+Item 1.2 in ``REMAINING_WORK.md`` adds a short-circuit that routes
+``OTHER`` classifications straight to human review. That short-circuit
+fires on ``OTHER``. It does **not** fire on a false-positive
+``ACCESS_REQUEST``. So the false positives documented above will still
+run down the access-request pipeline and end up asking the reporter for
+missing entity fields (name, employee_id, etc.). That is the exact
+original bug we are trying to fix, surviving for this specific class of
+input. It's an accepted cost of the keyword tradeoff, not a gap the
+1.2 short-circuit will paper over.
+
+Path to fix this class of failure
+----------------------------------
+
+The natural upgrade is an LLM-based classifier that can reason about
+context ("text editor" as software vs "editor role" as a permission
+level). Deferred for v1 because:
+
+- Adds a Gemini call per ticket (already 2-3 per invocation).
+- Adds a failure mode (429, refusal, unparseable output).
+- Nondeterministic — makes demos less predictable.
+- Consumes quota that is already scarce.
+
+If demo scenarios include the documented false positives, the answer
+is either (a) don't use those exact phrasings in the demo, or
+(b) accept the escalation-to-human that happens after the model tries
+and fails to extract entities.
+
+Non-English input — deliberate escalation, not a gap
+=====================================================
+
+The keyword set is English-only, deliberately. A ticket written in
+Spanish, French, Chinese, Arabic, or any other language will match no
+keyword and return ``OTHER`` — which routes to
+``escalate_unsupported_ticket`` and lands on a human reviewer.
+
+**This is the correct behavior for v1, not a gap to close.** Adding
+translated keywords (e.g. Spanish ``acceso``, French ``permission``,
+etc.) would narrow the escalation guard's coverage without solving the
+extraction problem: the pipeline's entity-extraction prompts, required
+field names, and downstream approval workflow are all English-centric.
+Classifying a Spanish ticket as ``ACCESS_REQUEST`` would send it into a
+pipeline that will mangle the extraction, then ask the reporter for an
+``employee_id`` in English — the exact original bug items 1.1/1.2 fix,
+reintroduced through a well-meaning enhancement.
+
+A human reviewer picking up a non-English escalation can triage it
+correctly today. That is the right outcome for v1. The path forward is
+either (a) an LLM-based classifier that reasons about language and
+intent (already noted above as the natural upgrade), or (b) a proper
+i18n pass across the whole pipeline (out of scope for a two-day demo).
+
+Regression tests in ``tests/test_classification.py`` pin the current
+behavior for representative non-English inputs so a future keyword-set
+change or an LLM upgrade cannot silently regress the escalation path.
 """
 
-from ticket_triage.enums import PrimaryCategory
+import re
+
+from ticket_triage.enums import PrimaryCategory, RecommendedActionType
 from ticket_triage.rulebook import Rulebook
+from ticket_triage.schema import RecommendedAction
+
+
+_ACCESS_REQUEST_KEYWORDS = (
+    # Verb / concept words — unambiguous access signals.
+    "access",
+    "permission",
+    "permissions",
+    "credentials",
+    "login",
+    "grant",
+    "provision",
+    "authorize",
+    "authorization",
+    # Role-level names — unambiguous permission levels in this domain.
+    # See module docstring for the tradeoff (known false positives on
+    # non-access contexts that happen to mention these words).
+    "editor",
+    "viewer",
+    "admin",
+)
+
+# Word-boundary, case-insensitive match against the keyword allowlist.
+# Word boundary matters: "accessible" (a different word about reachability)
+# should not match "access".
+_ACCESS_REQUEST_PATTERN = re.compile(
+    r"\b(" + "|".join(_ACCESS_REQUEST_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
 
 
 def classify_ticket(ticket_text: str, rulebook: Rulebook) -> PrimaryCategory:
@@ -14,13 +145,52 @@ def classify_ticket(ticket_text: str, rulebook: Rulebook) -> PrimaryCategory:
 
     Args:
         ticket_text: The raw text content of the incoming ticket.
-        rulebook: The loaded rule book to classify against.
+        rulebook: The loaded rule book. Accepted for tool-signature
+            stability (see the NOTE block in ``ticket_triage/agent.py``)
+            — not consulted by the keyword classifier itself. Changing
+            this signature would trigger ADK's schema-builder path
+            that is already emitting warnings; leaving the parameter
+            intact avoids that regression risk.
 
     Returns:
-        A PrimaryCategory matching the ticket type.
-
-    Raises:
-        ValueError: If the ticket cannot be matched to any known category.
+        ``PrimaryCategory.ACCESS_REQUEST`` if ``ticket_text`` contains
+        any access-request signal word (see the module docstring for
+        the keyword set and its tradeoffs).
+        ``PrimaryCategory.OTHER`` otherwise, including empty,
+        whitespace-only, or missing input.
     """
-    # Only access_request is supported until additional rule books are added
-    return PrimaryCategory.ACCESS_REQUEST
+    if not ticket_text or not ticket_text.strip():
+        return PrimaryCategory.OTHER
+    if _ACCESS_REQUEST_PATTERN.search(ticket_text):
+        return PrimaryCategory.ACCESS_REQUEST
+    return PrimaryCategory.OTHER
+
+
+def escalate_unsupported_ticket(ticket_text: str) -> RecommendedAction:
+    """Return an escalation action for a ticket whose category isn't handled.
+
+    Called by the agent when ``classify_ticket`` returns
+    ``PrimaryCategory.OTHER``. Does not construct a ``TicketState`` —
+    the ticket is not a valid input to the access-request pipeline.
+    The ``RecommendedAction`` of type ``ESCALATE_TO_HUMAN`` is the
+    semantic equivalent of the ``requires_human_review`` invariant
+    ``get_next_action`` enforces on the access-request path.
+
+    Args:
+        ticket_text: The raw ticket text. Accepted for tool-signature
+            stability and for future context in the escalation message
+            (e.g. logging) — the current implementation does not
+            inspect it.
+
+    Returns:
+        A ``RecommendedAction`` of type ``ESCALATE_TO_HUMAN`` with a
+        clear "not supported yet, routed for human review" message.
+    """
+    return RecommendedAction(
+        type=RecommendedActionType.ESCALATE_TO_HUMAN,
+        message=(
+            "This ticket does not appear to be an access request. "
+            "The automated triage system does not handle this ticket "
+            "type yet; routing to a human for review."
+        ),
+    )

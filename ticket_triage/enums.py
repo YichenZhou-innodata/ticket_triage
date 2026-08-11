@@ -107,13 +107,17 @@ class EntityField(StrEnum):
 class PrimaryCategory(StrEnum):
     """Top-level ticket categories.
 
-    Only ``access_request`` is defined by the current spec. Additional
-    categories (e.g. ``application_issue``) appear in the project readme but
-    are out of scope for this PR and will be added when their rule books are
-    written.
+    ``ACCESS_REQUEST`` is the only category with a rule book and a
+    triage pipeline. ``OTHER`` is the catch-all for tickets the
+    classifier recognizes as some kind of ticket but not one this
+    system currently handles (bug reports, feature requests,
+    questions, gibberish). The agent short-circuits to a
+    human-review escalation when it sees ``OTHER``; it does not run
+    the access-request pipeline.
     """
 
     ACCESS_REQUEST = "access_request"
+    OTHER = "other"
 
 
 class ApprovalStatus(StrEnum):

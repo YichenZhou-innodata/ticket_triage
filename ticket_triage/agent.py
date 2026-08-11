@@ -20,7 +20,10 @@ from pathlib import Path
 
 from google.adk.agents import LlmAgent
 
-from ticket_triage.domain.classification import classify_ticket
+from ticket_triage.domain.classification import (
+    classify_ticket,
+    escalate_unsupported_ticket,
+)
 from ticket_triage.domain.recommendation import get_next_action
 from ticket_triage.enums import State
 from ticket_triage.rulebook import Rulebook, load_rulebook
@@ -123,7 +126,10 @@ def _compose_instruction(rb: Rulebook) -> str:
     # then off-ramps). Alphabetical would scramble the natural reading order.
     states = [s for s in State if s in rb.allowed_events_per_state]
     lines = [
-        "You are a ticket triage agent for access_request tickets.",
+        (
+            "You are a ticket triage agent. You handle access_request "
+            "tickets; other ticket types are escalated to a human."
+        ),
         "",
         "Known states in the triage state machine:",
         *[f"  - {s.value}" for s in states],
@@ -150,8 +156,13 @@ def _compose_instruction(rb: Rulebook) -> str:
         "",
         "When given a ticket:",
         "  1. Call classify_ticket with the ticket text.",
-        "  2. Determine the current state and any missing required fields.",
-        "  3. Call get_next_action with the current state.",
+        "  2. If classify_ticket returned \"other\": call "
+        "escalate_unsupported_ticket with the ticket text and return "
+        "the recommended action from that tool. Do NOT proceed to "
+        "steps 3-4 in this case.",
+        "  3. Otherwise (classify_ticket returned \"access_request\"): "
+        "determine the current state and any missing required fields.",
+        "  4. Call get_next_action with the current state.",
         "",
         "Always return a structured response with the recommended action.",
     ]
@@ -165,5 +176,5 @@ root_agent = LlmAgent(
     model="gemini-flash-latest",
     description="Triages IT support tickets.",
     instruction=_compose_instruction(_RULEBOOK),
-    tools=[classify_ticket, get_next_action],
+    tools=[classify_ticket, escalate_unsupported_ticket, get_next_action],
 )
