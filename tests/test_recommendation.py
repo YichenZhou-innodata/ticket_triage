@@ -238,6 +238,27 @@ def test_sample_009_reopened_intake(tickets_by_id: dict[str, TicketState]) -> No
 # top of get_next_action must fire an early-return escalation regardless of
 # state, missing_fields, or duplicate_candidates. It must also preserve the
 # requires_human_review invariant and the audit-trail invariant.
+#
+# RESIDUAL FAILURE MODE — READ THIS BEFORE ASSUMING THE GUARD IS COMPLETE.
+#
+# The guard fires on the TicketState's primary_category field. It relies on
+# the model faithfully propagating classify_ticket's return value into the
+# TicketState it constructs when calling get_next_action.
+#
+# If the model IGNORES classify_ticket's OTHER return and constructs a
+# TicketState with primary_category=ACCESS_REQUEST anyway (deciding on its
+# own that the ticket "looks like" an access request), the guard does NOT
+# fire — the cascade runs, and the pipeline may again ask a bug reporter
+# for their employee_id. That is the exact original bug 1.1/1.2 fix,
+# surviving as a compliance-dependent failure mode.
+#
+# This is an LLM-behavior concern, not something these unit tests can
+# exercise. The mitigations that exist today are the instruction updates
+# in agent.py (item 1.2 — telling the model explicitly what to do on OTHER)
+# and the fact that classify_ticket runs as a tool call, so its return
+# lands in the conversation as visible signal rather than being hidden.
+# A stronger fix (compelling propagation) would need instruction-quality
+# work; noted here so this residual failure mode is not forgotten.
 # ----------------------------------------------------------------------------
 
 

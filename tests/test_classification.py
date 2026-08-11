@@ -232,3 +232,80 @@ def test_escalate_unsupported_ticket_ignores_input_text():
     r2 = escalate_unsupported_ticket("completely different content")
     assert r1.message == r2.message
     assert r1.type == r2.type
+
+
+# ----------------------------------------------------------------------
+# Input edge cases and non-English routing (item 1.3)
+#
+# The 1.3 audit found that 1.1 and 1.2 together already covered the
+# meaningful input gaps (empty, whitespace, OTHER short-circuit at both
+# instruction and code). The tests below are REGRESSION GUARDS — they
+# pin the current behavior for input classes that aren't explicitly
+# tested elsewhere, so a future keyword-set change or LLM-classifier
+# upgrade cannot silently regress the escalation path for these inputs.
+#
+# Scope decision recorded in REMAINING_WORK.md: no Python-side length
+# cap is added at the tool boundary. A cap that runs after the model
+# call already happened does not prevent the cost it appears to prevent
+# and gives a reader false confidence. See the item 1.3 section for the
+# full reasoning.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Spanish access request — no English keyword present.
+        "Necesito acceso al portal de proyectos",
+        # French bug-report-like text — no English keyword present.
+        "Le rapport ne fonctionne pas correctement",
+        # Chinese (CJK): general request — unicode / non-latin safety.
+        "我需要登录访问报告",
+        # Arabic (RTL script): general request — RTL / non-latin safety.
+        "أحتاج إلى الوصول",
+    ],
+)
+def test_non_english_input_classifies_as_other(text, rulebook):
+    """Non-English tickets deliberately route to OTHER → escalation.
+
+    See classification.py's "Non-English input" docstring section for
+    why this is correct behavior, not a gap. A human reviewer picking
+    up the escalation can triage the ticket in its native language.
+    """
+    assert classify_ticket(text, rulebook) is PrimaryCategory.OTHER
+
+
+def test_mixed_english_and_spanish_matches_via_english_keyword(rulebook):
+    """English-mixed content (common in enterprise Spanglish) still routes
+    through the access-request pipeline via the English keyword."""
+    assert (
+        classify_ticket("Necesito access al portal", rulebook)
+        is PrimaryCategory.ACCESS_REQUEST
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "hi",  # single word, non-keyword
+        "!!!???",  # punctuation only
+        "12345",  # digits only
+    ],
+)
+def test_short_non_signal_input_returns_other(text, rulebook):
+    """Very short content-free input returns OTHER (no signal to classify)."""
+    assert classify_ticket(text, rulebook) is PrimaryCategory.OTHER
+
+
+def test_very_long_input_with_keyword_still_matches(rulebook):
+    """Regex handles long inputs without crashing or timing out.
+
+    This is a smoke test for the "doesn't blow up" property — NOT a
+    length-limit test. The scope decision to not enforce a Python-side
+    length cap on ticket_text is documented in REMAINING_WORK.md item
+    1.3. Realistic ticket sizes are well below this; the 100k figure
+    is a "if someone paste-bombed" guard.
+    """
+    filler = "lorem ipsum " * 10_000  # ~120k characters
+    text = filler + "please grant access"
+    assert classify_ticket(text, rulebook) is PrimaryCategory.ACCESS_REQUEST

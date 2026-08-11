@@ -247,32 +247,69 @@ code path for it — otherwise the LLM will call `classify_ticket`, see
 
 ### 1.3 Edge-case hardening on input
 
-**Problem.** The audit tested four adversarial inputs live; three ran,
-one (empty string) failed silently on the last quota window. The
-schema layer already rejects oversized / wrong-type / unknown-enum
-input loudly (see
-[`tests/test_validation.py`](tests/test_validation.py)); this item is
-about the *ingest* path, which precedes schema validation.
+**Audit finding — MOSTLY COVERED BY 1.1 + 1.2.**
 
-Inputs to handle without crashes and without inventing access
-requests:
-- Empty or whitespace-only input
-- Content-free input ("hi thanks", "asdfasdf")
-- Very long input (10k+ characters)
-- Non-ticket input (a system log, a JSON blob, an SQL query)
-- Non-English input
+The 1.3 audit found that the meaningful input gaps were closed by the
+prior two items:
 
-**Approach.** Add a lightweight pre-classification guard in
-`classify_ticket` (or a small helper in the same module). If the
-input is empty, whitespace-only, or below some minimum-signal
-threshold, return the new `UNKNOWN` category immediately without
-running the keyword classifier. For non-English input, keyword
-matching against English keywords will naturally return `UNKNOWN`
-without special handling — which is the correct default (route to a
-human), not an error.
+- **Empty and whitespace-only input** — handled by
+  [`classify_ticket`](ticket_triage/domain/classification.py) line 134:
+  `if not ticket_text or not ticket_text.strip(): return
+  PrimaryCategory.OTHER`. Combined with 1.2's OTHER short-circuit
+  (instruction + code guard), empty/whitespace tickets escalate to
+  human without crashing and without asking a bug reporter for an
+  employee_id. Two dedicated tests pass today.
+- **Very short and content-free input** (`"hi"`, `"asdf"`, `"!!!"`,
+  `"12345"`) — passes the empty check, matches no keyword, returns
+  OTHER → escalates. Same code path as above.
+- **Non-English input** — the keyword set is English-only,
+  deliberately. Spanish / French / Chinese / Arabic tickets match no
+  keyword and route to OTHER → escalate to human. **This is correct
+  behavior for v1, not a gap.** Adding translated keywords would
+  narrow the escalation guard's coverage without solving the
+  extraction problem: the entire downstream pipeline (entity
+  prompts, required field names, approval workflow) is
+  English-centric. See the "Non-English input" section of
+  [`classification.py`](ticket_triage/domain/classification.py)'s
+  module docstring for the full analysis.
 
-**Verify.** Unit tests in `tests/test_classification.py` covering each
-edge case. Zero live-call cost.
+**Scope decision — no Python-side length cap on `ticket_text`.**
+
+A tempting addition is a `max_length` check on `classify_ticket`'s
+`ticket_text` argument. **This does not do what a reader would think
+it does.** The classifier is a TOOL called BY the model, so the
+ticket text has already been sent to Gemini as user content by the
+time `classify_ticket` runs. The costs (tokens spent on the model
+call, latency, potential rejection by Gemini's own token limits) have
+already been incurred. Adding a Python-side cap here would give a
+reader false confidence that oversized inputs are being turned away
+at the door. A meaningful size guard would need to live in caller
+code before `Runner.run()`, which is out of scope for v1 (human-driven
+demo, no public webhook, realistic ticket sizes well under 10K
+chars). Documented instead of implemented.
+
+**Residual scope actually implemented in 1.3:**
+
+- Regression tests in
+  [`tests/test_classification.py`](tests/test_classification.py) that
+  pin current behavior for input classes not previously covered:
+  non-English (Spanish, French, Chinese, Arabic), mixed-language,
+  short-content edge cases (single word, punctuation-only,
+  digits-only), and a very-long-input smoke test that verifies the
+  regex handles ~120k characters without crashing.
+- A "Non-English input" section added to
+  [`classification.py`](ticket_triage/domain/classification.py)'s
+  module docstring explaining why non-English tickets deliberately
+  escalate and why adding translated keywords is not the right fix.
+- A "Residual failure mode" note on the OTHER-guard test section in
+  [`tests/test_recommendation.py`](tests/test_recommendation.py)
+  recording the LLM-compliance risk: the guard fires on the
+  TicketState's `primary_category` field, so if the model ignores
+  `classify_ticket`'s OTHER return and constructs a TicketState with
+  `primary_category=ACCESS_REQUEST` anyway, the guard does not fire.
+  Not fixable at the code layer; noted so it isn't forgotten.
+
+**Verify.** Unit tests only. Zero live-call cost.
 
 **Note on required vs provisional fields — READ BEFORE HARDENING.**
 The rule book distinguishes:

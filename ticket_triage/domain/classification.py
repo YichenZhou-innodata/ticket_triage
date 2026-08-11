@@ -75,6 +75,34 @@ If demo scenarios include the documented false positives, the answer
 is either (a) don't use those exact phrasings in the demo, or
 (b) accept the escalation-to-human that happens after the model tries
 and fails to extract entities.
+
+Non-English input — deliberate escalation, not a gap
+=====================================================
+
+The keyword set is English-only, deliberately. A ticket written in
+Spanish, French, Chinese, Arabic, or any other language will match no
+keyword and return ``OTHER`` — which routes to
+``escalate_unsupported_ticket`` and lands on a human reviewer.
+
+**This is the correct behavior for v1, not a gap to close.** Adding
+translated keywords (e.g. Spanish ``acceso``, French ``permission``,
+etc.) would narrow the escalation guard's coverage without solving the
+extraction problem: the pipeline's entity-extraction prompts, required
+field names, and downstream approval workflow are all English-centric.
+Classifying a Spanish ticket as ``ACCESS_REQUEST`` would send it into a
+pipeline that will mangle the extraction, then ask the reporter for an
+``employee_id`` in English — the exact original bug items 1.1/1.2 fix,
+reintroduced through a well-meaning enhancement.
+
+A human reviewer picking up a non-English escalation can triage it
+correctly today. That is the right outcome for v1. The path forward is
+either (a) an LLM-based classifier that reasons about language and
+intent (already noted above as the natural upgrade), or (b) a proper
+i18n pass across the whole pipeline (out of scope for a two-day demo).
+
+Regression tests in ``tests/test_classification.py`` pin the current
+behavior for representative non-English inputs so a future keyword-set
+change or an LLM upgrade cannot silently regress the escalation path.
 """
 
 import re
