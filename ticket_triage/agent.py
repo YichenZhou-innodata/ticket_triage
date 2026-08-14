@@ -159,10 +159,40 @@ def _compose_instruction(rb: Rulebook) -> str:
         "  2. If classify_ticket returned \"other\": call "
         "escalate_unsupported_ticket with the ticket text and return "
         "the recommended action from that tool. Do NOT proceed to "
-        "steps 3-4 in this case.",
+        "steps 3-5 in this case.",
         "  3. Otherwise (classify_ticket returned \"access_request\"): "
-        "determine the current state and any missing required fields.",
-        "  4. Call get_next_action with the current state.",
+        "extract entity fields from the ticket text and determine "
+        "any missing required fields.",
+        # NOTE — INTENTIONAL STATE STEERING, do not "correct" this.
+        # Steps 4-5 below deliberately steer the model toward state=intake
+        # and a single get_next_action call. This works WITH the KNOWN TRAP
+        # (see the NOTE block near _RULEBOOK above): the cascade only
+        # handles state=intake explicitly, so any other state falls
+        # through to escalate_to_human and the model interprets that as
+        # "wrong answer, try again" and probes multiple states — that was
+        # the latency problem this steering fixes. Making the model MORE
+        # accurate about state selection regresses the happy path (also
+        # documented in the NOTE). If the cascade later becomes state-
+        # aware (REMAINING_WORK.md Part 2.2), delete steps 4-5's
+        # steering language along with the trap.
+        #
+        # The step-4 language below is deliberately absolute. An earlier
+        # version had an escape-hatch clause ("unless the ticket text
+        # clearly indicates it is further along") and the model
+        # interpreted a complete ticket with all fields present as
+        # "further along" and picked state=ready_for_access_review,
+        # which fell through the cascade and regressed the happy path
+        # back to escalate_to_human. Removed. Ambiguity here is not a
+        # feature — the cascade is state-blind, so every possible state
+        # selection except "intake" is wrong for the demo.
+        "  4. A ticket submitted through this interface has just arrived "
+        "and is always in the \"intake\" state. Use \"intake\". Do not "
+        "select any other state — a complete ticket with all fields "
+        "present is still in intake, because intake is where triage "
+        "begins, not where it ends.",
+        "  5. Call get_next_action ONE time with that state. Accept the "
+        "result. Do not call get_next_action again with a different "
+        "state hoping for a better answer.",
         "",
         "Always return a structured response with the recommended action.",
     ]
@@ -172,8 +202,11 @@ def _compose_instruction(rb: Rulebook) -> str:
 root_agent = LlmAgent(
     name="ticket_executor",
     # gemini-2.0-flash returns 429 limit:0 on this project's free tier.
-    # gemini-flash-latest is the ADK-recommended alias with working quota.
-    model="gemini-flash-latest",
+    # gemini-flash-latest works but was seeing 503 UNAVAILABLE from its
+    # serving pool on demo day. gemini-flash-lite-latest is a separate
+    # serving deployment (dodges the 503 pattern) and has faster
+    # per-call inference, both of which matter for the live demo.
+    model="gemini-flash-lite-latest",
     description="Triages IT support tickets.",
     instruction=_compose_instruction(_RULEBOOK),
     tools=[classify_ticket, escalate_unsupported_ticket, get_next_action],
