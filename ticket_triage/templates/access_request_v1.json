@@ -5,7 +5,8 @@
     "spec_source": "access_issue_state_machine.md (root of repo)",
     "allowed_events_per_state": "Inferred from state and event semantics. The spec does not enumerate which events are valid in each state. Confirm with Yichen.",
     "allowed_actions_per_state": "Inferred from state semantics. The spec does not enumerate which actions are valid in each state. Confirm with Yichen.",
-    "transitions": "Each transition carries a 'source' field: 'spec_explicit' (from the ABP-1007 example) or 'inferred' (read from state and event names). Transitions where the spec is genuinely ambiguous live in 'todo_transitions' and are intentionally omitted from the loadable transitions list."
+    "transitions": "Each transition carries a 'source' field: 'spec_explicit' (from the ABP-1007 example) or 'inferred' (read from state and event names). Transitions where the spec is genuinely ambiguous live in 'todo_transitions' and are intentionally omitted from the loadable transitions list.",
+    "part2_1_resolution": "Audit completed on 2026-08-12. Resolved conflicts for intake, stale_waiting_for_user, and reopened. Cascade amended to respect rulebook; mapping layer added for reopened intake."
   },
   "required_fields": ["employee_id"],
   "provisional_required_fields": [
@@ -184,3 +185,5 @@
     }
   ]
 }
+
+

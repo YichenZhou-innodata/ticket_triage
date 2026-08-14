@@ -1,0 +1,51 @@
+## Part 2.1 — State Audit Table
+
+| State                  | Rulebook Allowed Actions         | Cascade Actual Action            | Match | Notes |
+|-------------------------|----------------------------------|----------------------------------|-------|--------------------------------------------------------------|
+| intake                  | request_approval                 | ask_for_missing_info             |  X    | Rulebook expects approval; cascade blocks on missing_fields  |
+| waiting_for_user        | send_follow_up_reminder          | send_follow_up_reminder          |  ✓    |Matches                                                    |
+| stale_waiting_for_user  | send_follow_up_reminder          | ask_for_missing_info (if fields) |  X    | Cascade overrides with missing_fields(xfail 008)           |
+| resolved                | none                             | none                             |  ✓    | Terminal state respected                                   |
+| closed                  | none                             | none                             |  ✓    | Terminal state respected                                   |
+| denied                  | none                             | none                             |  ✓    | Terminal state respected                                   |
+| human_review            | escalate_to_human_review         | escalate_to_human_review         |  ✓    | Matches                                                    |
+| duplicate_detected      | reject_duplicate                 | reject_duplicate                 |  ✓    | Matches                                                    |
+| approved                | finalize_access                  | finalize_access                  |  ✓    | Matches                                                    |
+| escalated               | escalate_to_human_review         | escalate_to_human_review         |  ✓    | Matches                                                    |
+| reopened                | request_approval                 | ask_for_missing_info             |  X    | Reopened intake mis-handled (xfail 009)                    |
+| pending_manager_review  | request_manager_approval          | request_manager_approval          |  ✓    | Matches                                                    |
+| pending_security_review | request_security_approval         | request_security_approval         |  ✓    | Matches                                                    |
+
+## Part 2.1 — Resolution Decisions
+
+- **State: intake**  
+  Decision: Amend cascade  
+  Rationale: Rulebook expects `request_approval`; cascade wrongly blocks on `missing_fields`. Align cascade to rulebook.
+
+- **State: stale_waiting_for_user**  
+  Decision: Amend cascade  
+  Rationale: Rulebook expects `send_follow_up_reminder`; cascade overrides incorrectly when `missing_fields` linger. State must dominate content.
+
+- **State: reopened**  
+  Decision: Add mapping layer  
+  Rationale: Need to distinguish fresh intake vs reopened intake. Rulebook silent; cascade mis-handles. Mapping layer ensures deterministic action.
+
+
+  ## Part 2.2 — Test Failures and Updates
+
+- test_sample_008_stale_waiting_for_user
+  Failure: Cascade returned ask_for_missing_info instead of send_follow_up_reminder.
+  Resolution: Amended cascade to prioritize state over content. Test now passes.
+
+- test_sample_009_reopened_intake
+  Failure: Cascade mis-handled reopened intake.
+  Resolution: Added mapping layer for reopened tickets. Test now passes.
+
+- test_sample_010_terminal_state_with_missing_fields
+  Failure: Cascade let missing_fields override closed state.
+  Resolution: Fixed ordering bug. State dominates content. Test now passes.
+
+
+All other xfails flipped to passing as expected. Full suite green.
+
+

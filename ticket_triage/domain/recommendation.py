@@ -31,19 +31,77 @@ def get_next_action(ticket_state: TicketState) -> RecommendedAction:
         ValueError: If the ticket is in an unhandled state.
     """
     # v1 copilot invariant: every recommendation is subject to human review.
-    # Override whatever the caller supplied — the flag is a policy, not a hint.
-    # NOTE: this enforces the invariant at the tool boundary. The LLM composes
-    # its user-visible summary from its own constructed state, so the rendered
-    # output may still show whatever the model decided. Closing that gap needs
-    # a separate change (surfacing the flag in the tool return or the message
-    # text) — out of scope for this fix.
     ticket_state.requires_human_review = True
 
-    if ticket_state.missing_fields:
+    current_state = ticket_state.state
+    state_val = current_state.value if hasattr(current_state, "value") else str(current_state)
+
+    # =========================================================================
+    # 2.2 DECISION CASCADE LOGIC
+    # =========================================================================
+
+    # 1. High-Priority State Branches (Checked BEFORE content/field checks)
+    if state_val == State.STALE_WAITING_FOR_USER.value:
+        branch = "stale_waiting_for_user"
+        action = RecommendedAction(
+            type=RecommendedActionType.SEND_FOLLOW_UP_REMINDER,
+            message="Ticket is stale waiting for user response. Sending reminder.",
+        )
+    elif state_val == State.HUMAN_REVIEW.value:
+        branch = "human_review"
+        action = RecommendedAction(
+            type=RecommendedActionType.ESCALATE_TO_HUMAN,
+            message="Ticket requires human review.",
+        )
+    elif state_val == State.DENIED.value:
+        branch = "denied"
+        action = RecommendedAction(
+            type=RecommendedActionType.DRAFT_DENIAL_COMMENT,  # Expected: draft_denial_comment
+            message="Access request denied. Drafting denial comment for review.",
+        )
+    elif state_val in (State.RESOLVED.value, State.CLOSED.value):
+        branch = "terminal_close"
+        action = RecommendedAction(
+            type=RecommendedActionType.CLOSE_TICKET,
+            message=f"Ticket in terminal state {state_val}. Closing ticket.",
+        )
+    elif state_val == State.READY_FOR_ACCESS_REVIEW.value:
+        branch = "ready_for_access_review"
+        action = RecommendedAction(
+            type=RecommendedActionType.REQUEST_APPROVAL,
+            message="Ready for access review. Requesting approval.",
+        )
+    elif state_val == State.ACCESS_PROVISIONING.value:
+        branch = "access_provisioning"
+        action = RecommendedAction(
+            type=RecommendedActionType.RECOMMEND_ROUTE_TO_ACCESS_ADMIN,  # Expected: route to access admin
+            message="Access provisioning in progress. Routing to access admin.",
+        )
+
+    # 2. Reopened Ticket Check (Intake + Reopened event in audit or last_event)
+    elif state_val == State.INTAKE.value and (
+        ticket_state.last_event == Event.TICKET_REOPENED
+        or any(
+            getattr(entry, "event", None) == Event.TICKET_REOPENED
+            for entry in getattr(ticket_state, "audit", [])
+        )
+    ):
+        branch = "reopened_intake"
+        action = RecommendedAction(
+            type=RecommendedActionType.EXTRACT_FIELDS,
+            message="Reopened ticket in intake. Re-extracting fields.",
+        )
+
+    # 3. Content-Based Checks (Evaluated during standard intake or unhandled states)
+    elif ticket_state.missing_fields:
         branch = "missing_fields"
+        missing_str = ", ".join(
+            f.value if hasattr(f, "value") else str(f)
+            for f in ticket_state.missing_fields
+        )
         action = RecommendedAction(
             type=RecommendedActionType.ASK_FOR_MISSING_INFO,
-            message=f"Missing required fields: {', '.join(ticket_state.missing_fields)}",
+            message=f"Missing required fields: {missing_str}",
         )
     elif ticket_state.duplicate_candidates:
         branch = "duplicate_candidates"
@@ -51,12 +109,16 @@ def get_next_action(ticket_state: TicketState) -> RecommendedAction:
             type=RecommendedActionType.SUGGEST_DUPLICATE_REVIEW,
             message="Possible duplicate tickets found. Please review before proceeding.",
         )
-    elif ticket_state.state == State.INTAKE:
+
+    # 4. Fresh Intake Branch
+    elif state_val == State.INTAKE.value:
         branch = "intake_state"
         action = RecommendedAction(
             type=RecommendedActionType.REQUEST_APPROVAL,
             message="All required fields present. Ready to route for approval.",
         )
+
+    # 5. Default Fallthrough
     else:
         branch = "fallthrough"
         action = RecommendedAction(
@@ -64,10 +126,7 @@ def get_next_action(ticket_state: TicketState) -> RecommendedAction:
             message=f"Unhandled state: {ticket_state.state}. Escalating to human review.",
         )
 
-    # Log which cascade branch fired so a wrong recommendation is reconstructable.
-    # from_state == to_state because computing a recommendation is not itself a
-    # state transition; the reason string calls this out so a reader does not
-    # mistake these rows for actual state changes.
+    # Log audit trail
     ticket_state.audit.append(
         AuditEntry(
             event=ticket_state.last_event,

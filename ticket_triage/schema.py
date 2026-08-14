@@ -285,3 +285,8 @@ class TicketState(BaseModel):
         max_length=_MAX_LIST_LARGE,
         description="Audit trail of past state transitions for this ticket.",
     )
+
+from typing import Dict, List
+from ticket_triage.enums import State, RecommendedActionType
+
+
